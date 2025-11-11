@@ -1,0 +1,76 @@
+# docker-compose.yml
+networks:
+  f1-network:
+    driver: bridge
+
+services:
+  # 1. The Data Lake
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # MinIO Console
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    volumes:
+      - ./minio_data:/data
+    networks:
+      - f1-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # 2. The Spark Cluster Master
+  spark-master:
+    image: bitnamilegacy/spark:3.5.0
+    container_name: spark-master
+    ports:
+      - "8080:8080" # Spark Master Web UI
+      - "7077:7077" # Spark Master RPC
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+    networks:
+      - f1-network
+
+  # 3. The Spark Cluster Worker
+  spark-worker:
+    image: bitnamilegacy/spark:3.5.0
+    container_name: spark-worker
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+    networks:
+      - f1-network
+
+  # 4. The Data Scientist Workbench
+  jupyter:
+    build:
+      context: ./jupyter # We build a custom Dockerfile
+    container_name: jupyter-lab
+    ports:
+      - "8888:8888" # JupyterLab UI
+    volumes:
+      - ./jupyter/notebooks:/home/jovyan/work # Mount notebooks
+      - ./fastf1_cache:/home/jovyan/.cache/fastf1 # Persist FastF1 cache
+    depends_on:
+      - minio
+      - spark-master
+    networks:
+      - f1-network
+    environment:
+      - JUPYTER_TOKEN=f1project # Set a simple token for login
+
+volumes:
+  minio_data:
+  fastf1_cache:
